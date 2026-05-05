@@ -1,0 +1,13 @@
+{
+  "name": "hr-analytics-dashboard-vercel",
+  "version": "1.0.0",
+  "description": "戰略性人力資源數據分析平台 V2.0 — Vercel 部署版（含 AI CORS 代理）",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "deploy": "vercel --prod"
+  }
+}

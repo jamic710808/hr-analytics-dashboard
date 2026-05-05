@@ -4452,7 +4452,7 @@ function escHtml(str) {
 const AI_CFG_KEY = 'hrDashAICfg_v2';
 let aiCfg = {
   provider:'openai', endpoint:'https://api.openai.com/v1', apiKey:'', model:'gpt-4o-mini',
-  temperature:0.3, useStream:true, savedKeys:{}, savedBaseUrls:{}, useCorsProxy:false, apiFormat:'openai', maxTokens:4096
+  temperature:0.3, useStream:true, savedKeys:{}, savedBaseUrls:{}, corsProxyMode:'off', corsProxyUrl:'', apiFormat:'openai', maxTokens:4096
 };
 let aiHistory = [], aiCurrentPage = 'page1', aiStreaming = false;
 
@@ -4507,7 +4507,8 @@ function loadAICfg() {
     if (p.model)         aiCfg.model = p.model;
     if (p.temperature !== undefined) aiCfg.temperature = p.temperature;
     if (p.useStream !== undefined)   aiCfg.useStream = p.useStream;
-    if (p.useCorsProxy !== undefined) aiCfg.useCorsProxy = p.useCorsProxy;
+    if (p.corsProxyMode)              aiCfg.corsProxyMode = p.corsProxyMode;
+    if (p.corsProxyUrl !== undefined) aiCfg.corsProxyUrl  = p.corsProxyUrl;
     if (p.apiFormat)     aiCfg.apiFormat = p.apiFormat;
     if (p.maxTokens)     aiCfg.maxTokens = p.maxTokens;
     aiCfg.apiKey = aiCfg.savedKeys[aiCfg.provider] || '';
@@ -4563,6 +4564,23 @@ function toggleInlineAdv() {
   body.classList.toggle('open');
   if (arrow) arrow.textContent = body.classList.contains('open') ? '▾' : '▸';
 }
+function onProxyModeChange() {
+  const sel = document.getElementById('aiProxyInline');
+  const row = document.getElementById('aiProxyUrlRow');
+  if (!sel || !row) return;
+  row.style.display = sel.value === 'custom' ? 'flex' : 'none';
+}
+/* 依代理模式包裝目標 URL */
+function wrapWithProxy(originalUrl) {
+  if (aiCfg.corsProxyMode === 'local') {
+    return `http://localhost:8080/proxy?url=${encodeURIComponent(originalUrl)}`;
+  }
+  if (aiCfg.corsProxyMode === 'custom' && aiCfg.corsProxyUrl) {
+    const base = aiCfg.corsProxyUrl.replace(/\/$/, '');
+    return `${base}?url=${encodeURIComponent(originalUrl)}`;
+  }
+  return originalUrl;
+}
 function saveAIInlineCfg() {
   const g = id => document.getElementById(id);
   if (g('aiProvInline'))  aiCfg.provider = g('aiProvInline').value;
@@ -4572,8 +4590,9 @@ function saveAIInlineCfg() {
   if (g('aiTempInline'))  aiCfg.temperature = parseFloat(g('aiTempInline').value)||0.3;
   if (g('aiMaxTokInline')) aiCfg.maxTokens = parseInt(g('aiMaxTokInline').value)||4096;
   if (g('aiStreamInline')) aiCfg.useStream = g('aiStreamInline').checked;
-  if (g('aiProxyInline'))  aiCfg.useCorsProxy = g('aiProxyInline').value==='1';
-  if (g('aiFmtInline'))    aiCfg.apiFormat = g('aiFmtInline').value;
+  if (g('aiProxyInline')) aiCfg.corsProxyMode = g('aiProxyInline').value || 'off';
+  if (g('aiProxyUrl'))    aiCfg.corsProxyUrl  = g('aiProxyUrl').value.trim();
+  if (g('aiFmtInline'))   aiCfg.apiFormat = g('aiFmtInline').value;
   saveAICfgToStorage(); updateAIProvLabel(); showToast('✅ AI 設定已儲存','ok');
 }
 function clearAISavedCfg() {
@@ -4590,7 +4609,9 @@ function loadAIInlineCfg() {
   if (g('aiTempInline'))  g('aiTempInline').value = aiCfg.temperature??0.3;
   if (g('aiMaxTokInline')) g('aiMaxTokInline').value = aiCfg.maxTokens||4096;
   if (g('aiStreamInline')) g('aiStreamInline').checked = aiCfg.useStream!==false;
-  if (g('aiProxyInline'))  g('aiProxyInline').value = aiCfg.useCorsProxy?'1':'0';
+  if (g('aiProxyInline')) g('aiProxyInline').value = aiCfg.corsProxyMode || 'off';
+  if (g('aiProxyUrl'))    g('aiProxyUrl').value    = aiCfg.corsProxyUrl  || '';
+  if (typeof onProxyModeChange === 'function') onProxyModeChange();
 }
 
 /* ── Panel management ─────────────────────────────────────────────────────── */
@@ -4686,8 +4707,7 @@ async function _callOpenAI(messages, onChunk, onDone, onError) {
   const p = aiCfg.provider;
   const useCustom = p==='custom'||p==='openrouter'||p==='ollama';
   const baseUrl = useCustom ? (aiCfg.savedBaseUrls[p]||aiCfg.endpoint||AI_PROVIDERS[p]?.baseUrl||'') : AI_PROVIDERS[p].baseUrl;
-  let url = `${baseUrl}/chat/completions`;
-  if (aiCfg.useCorsProxy) url = `http://localhost:8080/proxy?url=${encodeURIComponent(url)}`;
+  let url = wrapWithProxy(`${baseUrl}/chat/completions`);
   const resp = await fetch(url,{
     method:'POST', signal:aiAbortCtrl?.signal,
     headers:{'Content-Type':'application/json','Authorization':`Bearer ${aiCfg.apiKey}`},
@@ -4712,8 +4732,7 @@ async function _callOpenAI(messages, onChunk, onDone, onError) {
 async function _callAnthropic(messages, onChunk, onDone, onError) {
   const p = aiCfg.provider;
   const baseUrl = (p==='anthropic') ? AI_PROVIDERS.anthropic.baseUrl : aiCfg.endpoint;
-  let url = `${baseUrl}/v1/messages`;
-  if (aiCfg.useCorsProxy) url = `http://localhost:8080/proxy?url=${encodeURIComponent(url)}`;
+  let url = wrapWithProxy(`${baseUrl}/v1/messages`);
   const sysMsg = messages.find(m=>m.role==='system')?.content||SYSTEM_PROMPT;
   const userMsgs = messages.filter(m=>m.role!=='system').map(m=>({role:m.role==='user'?'user':'assistant',content:m.content}));
   const resp = await fetch(url,{
@@ -5007,10 +5026,15 @@ window.addEventListener('DOMContentLoaded', () => {
         </div>
         <div class="ai-cfg-row">
           <label class="ai-cfg-lbl">CORS 代理</label>
-          <select id="aiProxyInline">
-            <option value="0">關閉（直連）</option>
-            <option value="1">本機代理（:8080）</option>
+          <select id="aiProxyInline" onchange="onProxyModeChange()">
+            <option value="off">關閉（直連）</option>
+            <option value="local">本機代理（:8080）</option>
+            <option value="custom">自訂代理 URL</option>
           </select>
+        </div>
+        <div class="ai-cfg-row" id="aiProxyUrlRow" style="display:none">
+          <label class="ai-cfg-lbl">代理 URL</label>
+          <input id="aiProxyUrl" type="text" placeholder="https://your-app.vercel.app/api/proxy">
         </div>
         <div class="ai-cfg-row" id="aiInlineFmtRow" style="display:none">
           <label class="ai-cfg-lbl">API 格式</label>
