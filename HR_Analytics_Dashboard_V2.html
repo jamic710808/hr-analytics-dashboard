@@ -4805,20 +4805,27 @@ async function sendFollowup() {
   const msgs=[{role:'system',content:SYSTEM_PROMPT},...aiHistory.slice(-10)];
   await callAI(msgs,
     data=>appendToLoading(loadId,data),
-    full=>{finalizeLoading(loadId,full);aiHistory.push({role:'assistant',content:full});updateRoundLabel();saveAIChatCache();},
+    full=>{finalizeLoading(loadId,full);aiHistory.push({role:'assistant',content:full});updateRoundLabel();saveAIChatCache();setupQuickReplies(aiCurrentPage);},
     err =>{replaceLoading(loadId,'❌ 錯誤：'+escHtml(err));setAIStatus('error');}
   );
 }
 function sendQuickReply(text) {
-  const i=document.getElementById('aiInput'); if(i) i.value=text;
-  sendFollowup(); document.querySelectorAll('.ai-qr').forEach(el=>el.remove());
+  document.querySelectorAll('.ai-qr').forEach(el=>el.remove());
+  const i=document.getElementById('aiInput');
+  if(i){ i.value=text; i.dispatchEvent(new Event('input')); }
+  sendFollowup();
 }
 function setupQuickReplies(pageId) {
   document.querySelectorAll('.ai-qr').forEach(el=>el.remove());
-  const qrs=PAGE_QR[pageId]; if(!qrs) return;
+  const qrs=PAGE_QR[pageId]; if(!qrs||!qrs.length) return;
   const body=document.getElementById('aiBody');
   const div=document.createElement('div'); div.className='ai-qr';
-  div.innerHTML=qrs.map(q=>`<button class="ai-qr-btn" onclick="sendQuickReply('${escHtml(q).replace(/'/g,"\\'")}'">${escHtml(q)}</button>`).join('');
+  qrs.forEach(q=>{
+    const btn=document.createElement('button');
+    btn.className='ai-qr-btn'; btn.textContent=q;
+    btn.addEventListener('click',()=>sendQuickReply(q));
+    div.appendChild(btn);
+  });
   body.appendChild(div); body.scrollTop=body.scrollHeight;
 }
 
