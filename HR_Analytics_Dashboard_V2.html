@@ -4480,7 +4480,9 @@ const SYSTEM_PROMPT = `你是一位資深人力資源數據分析顧問，專精
 3. 指出重點數字及其意涵（標記 ⚠️ 表示風險、💡 表示建議）
 4. 提出 2-3 個具體可行的行動建議
 5. 必要時提醒相關法規遵循風險
-6. 【標籤】格式用於標示重點類別`;
+6. 【標籤】格式用於標示重點類別
+7. 每次回應最後一行，輸出與本次分析最相關的 3 個後續追問，格式固定如下，不可省略、不可換行：
+%%SUGGESTIONS%%["問題1","問題2","問題3"]%%END%%`;
 
 const PAGE_QR = {
   page1:['哪個部門離職率最需要優先關注？','目前人力流動趨勢是否正常？','員工敬業度偏低的根本原因是什麼？'],
@@ -4542,15 +4544,25 @@ function onProvInlineChange() {
 function updateInlineModelOptions(pid) {
   const container = document.getElementById('aiModelInline');
   if (!container) return;
+  const customRow = document.getElementById('aiModelCustomRow');
+  if (customRow) customRow.style.display = 'none';
   const prov = AI_PROVIDERS[pid];
   if (!prov || !prov.models.length) {
     if (container.tagName==='SELECT') container.outerHTML = `<input type="text" id="aiModelInline" placeholder="請輸入模型名稱" value="${escHtml(aiCfg.model||'')}">`;
   } else {
     const opts = prov.models.map(m=>`<option value="${m}"${m===aiCfg.model?' selected':''}>${m}</option>`).join('');
+    const customOpt = pid==='openrouter' ? `<option value="__custom__">自訂…</option>` : '';
     if (container.tagName==='INPUT') {
-      const sel = document.createElement('select'); sel.id='aiModelInline'; sel.innerHTML=opts;
+      const sel = document.createElement('select'); sel.id='aiModelInline'; sel.innerHTML=opts+customOpt;
       container.parentNode.replaceChild(sel, container);
-    } else { container.innerHTML = opts; }
+    } else { container.innerHTML = opts+customOpt; }
+    if (pid==='openrouter') {
+      const sel = document.getElementById('aiModelInline');
+      if (sel) sel.onchange = () => {
+        const cr = document.getElementById('aiModelCustomRow');
+        if (cr) cr.style.display = sel.value==='__custom__' ? 'flex' : 'none';
+      };
+    }
   }
 }
 function toggleInlineKeyVis() {
@@ -4585,7 +4597,10 @@ function saveAIInlineCfg() {
   const g = id => document.getElementById(id);
   if (g('aiProvInline'))  aiCfg.provider = g('aiProvInline').value;
   if (g('aiKeyInline'))   { aiCfg.apiKey = g('aiKeyInline').value.trim(); aiCfg.savedKeys[aiCfg.provider] = aiCfg.apiKey; }
-  if (g('aiModelInline')) aiCfg.model = g('aiModelInline').value.trim();
+  if (g('aiModelInline')) {
+    const mv = g('aiModelInline').value.trim();
+    aiCfg.model = (mv==='__custom__') ? (g('aiModelCustomInput')?.value.trim()||'') : mv;
+  }
   if (g('aiInlineUrl'))   { aiCfg.endpoint = g('aiInlineUrl').value.trim(); aiCfg.savedBaseUrls[aiCfg.provider] = aiCfg.endpoint; }
   if (g('aiTempInline'))  aiCfg.temperature = parseFloat(g('aiTempInline').value)||0.3;
   if (g('aiMaxTokInline')) aiCfg.maxTokens = parseInt(g('aiMaxTokInline').value)||4096;
@@ -4605,7 +4620,16 @@ function loadAIInlineCfg() {
   if (g('aiProvInline')) g('aiProvInline').value = aiCfg.provider||'openai';
   onProvInlineChange();
   if (g('aiKeyInline'))   g('aiKeyInline').value = aiCfg.savedKeys[aiCfg.provider]||aiCfg.apiKey||'';
-  if (g('aiModelInline')) g('aiModelInline').value = aiCfg.model||'';
+  if (g('aiModelInline')) {
+    const preset = AI_PROVIDERS[aiCfg.provider]?.models||[];
+    if (aiCfg.provider==='openrouter' && aiCfg.model && !preset.includes(aiCfg.model)) {
+      g('aiModelInline').value = '__custom__';
+      const ci = g('aiModelCustomInput'); if (ci) ci.value = aiCfg.model;
+      const cr = g('aiModelCustomRow'); if (cr) cr.style.display = 'flex';
+    } else {
+      g('aiModelInline').value = aiCfg.model||'';
+    }
+  }
   if (g('aiTempInline'))  g('aiTempInline').value = aiCfg.temperature??0.3;
   if (g('aiMaxTokInline')) g('aiMaxTokInline').value = aiCfg.maxTokens||4096;
   if (g('aiStreamInline')) g('aiStreamInline').checked = aiCfg.useStream!==false;
@@ -4669,7 +4693,7 @@ async function triggerAI(pageId) {
   const msgs = [{role:'system',content:SYSTEM_PROMPT},{role:'user',content:userMsg}];
   await callAI(msgs,
     chunk => appendToLoading(loadId, chunk),
-    full  => { finalizeLoading(loadId,full); aiHistory.push({role:'assistant',content:full}); updateRoundLabel(); setupQuickReplies(pageId); },
+    full  => { finalizeLoading(loadId,full); aiHistory.push({role:'assistant',content:full}); updateRoundLabel(); setupQuickReplies(parseSuggestions(full)||PAGE_QR[pageId]); },
     err   => { replaceLoading(loadId,'❌ 錯誤：'+escHtml(err)); setAIStatus('error'); }
   );
 }
@@ -4805,7 +4829,7 @@ async function sendFollowup() {
   const msgs=[{role:'system',content:SYSTEM_PROMPT},...aiHistory.slice(-10)];
   await callAI(msgs,
     data=>appendToLoading(loadId,data),
-    full=>{finalizeLoading(loadId,full);aiHistory.push({role:'assistant',content:full});updateRoundLabel();saveAIChatCache();setupQuickReplies(aiCurrentPage);},
+    full=>{finalizeLoading(loadId,full);aiHistory.push({role:'assistant',content:full});updateRoundLabel();saveAIChatCache();setupQuickReplies(parseSuggestions(full)||PAGE_QR[aiCurrentPage]);},
     err =>{replaceLoading(loadId,'❌ 錯誤：'+escHtml(err));setAIStatus('error');}
   );
 }
@@ -4815,9 +4839,9 @@ function sendQuickReply(text) {
   if(i){ i.value=text; i.dispatchEvent(new Event('input')); }
   sendFollowup();
 }
-function setupQuickReplies(pageId) {
+function setupQuickReplies(qrs) {
   document.querySelectorAll('.ai-qr').forEach(el=>el.remove());
-  const qrs=PAGE_QR[pageId]; if(!qrs||!qrs.length) return;
+  if(!qrs||!qrs.length) return;
   const body=document.getElementById('aiBody');
   const div=document.createElement('div'); div.className='ai-qr';
   qrs.forEach(q=>{
@@ -4830,8 +4854,15 @@ function setupQuickReplies(pageId) {
 }
 
 /* ── Markdown renderer ────────────────────────────────────────────────────── */
+function parseSuggestions(text) {
+  const m = text.match(/%%SUGGESTIONS%%(\[[\s\S]*?\])%%END%%/);
+  if (!m) return null;
+  try { return JSON.parse(m[1]); } catch(e) { return null; }
+}
+
 function renderMarkdownAI(text) {
   if (!text) return '';
+  text = text.replace(/%%SUGGESTIONS%%[\s\S]*?%%END%%/g, '').trim();
   let html = text.replace(/<thought>([\s\S]*?)<\/thought>/g, (_,c) =>
     `<div class="ai-thought"><div class="ai-thought-hd">💭 思考過程</div><div class="ai-thought-bd">${c.trim()}</div></div>`
   );
@@ -5009,6 +5040,10 @@ window.addEventListener('DOMContentLoaded', () => {
       <div class="ai-cfg-row">
         <label class="ai-cfg-lbl">模型</label>
         <select id="aiModelInline"></select>
+      </div>
+      <div class="ai-cfg-row" id="aiModelCustomRow" style="display:none">
+        <label class="ai-cfg-lbl"></label>
+        <input id="aiModelCustomInput" type="text" placeholder="輸入模型 ID，例如 qwen/qwen3-235b-a22b" style="flex:1">
       </div>
       <div class="ai-cfg-row" id="aiInlineKeyRow">
         <label class="ai-cfg-lbl">API Key</label>
